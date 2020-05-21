@@ -1,0 +1,290 @@
+<?php
+
+/**
+ * @file
+ * Provides an GoPay payment method for Drupal Commerce for testing and
+ *   development.
+ */
+
+/**
+ * Implements hook_menu();
+ */
+function commerce_payment_gopay_menu() {
+  $items = array();
+  
+  $items['rest/gopay/notify'] = array(
+    'title' => 'GoPay REST payment notification',
+    'page callback' => 'commerce_payment_gopay_rest_notify',
+    'access arguments' => array(
+      'access content'
+    ),
+    'type' => MENU_CALLBACK,
+    'file' => 'commerce_payment_gopay.pages.inc'
+  );
+
+  $items['gopay/return'] = array(
+    'title' => 'GoPay payment return',
+    'page callback' => 'commerce_payment_gopay_return',
+    'access arguments' => array(
+      'access content'
+    ),
+    'type' => MENU_CALLBACK,
+    'file' => 'commerce_payment_gopay.pages.inc'
+  );
+  
+  return $items;
+}
+
+/**
+ * Implements hook_libraries_info().
+ *
+ * For defining external libraries.
+ */
+function commerce_payment_gopay_libraries_info() {
+  $libraries['GoPay'] = array(
+   'name' => 'GoPay',
+   'vendor url' => 'https://github.com/gopaycommunity/gopay-php-apit',
+   'download url' => 'https://github.com/gopaycommunity/gopay-php-api/archive/master.zip',
+   'version' => '1.0',
+  //  'files' => array(
+  //    'php' => array('autoload.php'),
+  //   ),
+  //  'xautoload' => function($adapter) {
+  //    $adapter->add('GoPay\\', 'lib/');
+  //  },
+  );
+  return $libraries;
+ }
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_payment_gopay_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['commerce_payment_gopay'] = array(
+    'base' => 'commerce_payment_gopay',
+    'title' => t('GoPay payment'),
+    'description' => t('GoPay payments for Drupal.'),
+    'active' => TRUE,
+    'offsite' => TRUE,
+    'offsite_autoredirect' => TRUE,
+  );
+
+  return $payment_methods;
+}
+
+/**
+ * Payment method callback: settings form.
+ */
+function commerce_payment_gopay_settings_form($settings = array()) {
+  $form = array();
+
+  $form['shop_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Shop URL'),
+    '#description' => t('Shop URL'),
+    '#default_value' => $settings['shop_url'],
+    '#required' => TRUE,
+  );
+
+  $form['go_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('GoID'),
+    '#description' => t('go_id'),
+    '#default_value' => $settings['go_id'],
+    '#required' => TRUE,
+  );
+  
+  $form['secure_key'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Secure Key'),
+    '#description' => t('secure_key'),
+    '#default_value' => $settings['secure_key'],
+    '#required' => TRUE,
+  );
+
+  $form['client_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Client ID'),
+    '#description' => t('client_id'),
+    '#default_value' => $settings['client_id'],
+    '#required' => TRUE,
+  );
+
+  $form['client_secret'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Client Secret'),
+    '#description' => t('client_secret'),
+    '#default_value' => $settings['client_secret'],
+    '#required' => TRUE,
+  );
+
+  $form['username'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Username'),
+    '#description' => t('username'),
+    '#default_value' => $settings['username'],
+    '#required' => TRUE,
+  );
+
+  $form['password'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Password'),
+    '#description' => t('password'),
+    '#default_value' => $settings['password'],
+    '#required' => TRUE,
+  );
+
+  $form['client_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Client ID'),
+    '#description' => t('client_id'),
+    '#default_value' => $settings['client_id'],
+    '#required' => TRUE,
+  );
+
+  return $form;
+}
+
+/**
+ * Payment method callback: adds a message to the submission form if enabled in
+ * the payment method settings.
+ */
+function commerce_payment_gopay_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $form = array();
+
+  if (!empty($payment_method['settings']['show_payment_instructions'])) {
+    $form['commerce_payment_gopay'] = array(
+      '#markup' => '<span class="commerce-payment-gopay">' . t('(Continue with checkout to complete payment via GoPay.)') . '</span>',
+    );
+  }
+
+  return $form;
+}
+
+
+/**
+ * Payment method callback: redirect form, a wrapper around the module's general
+ *   use function for building a WPS form.
+ */
+function commerce_payment_gopay_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Return an error if the enabling action's settings haven't been configured.
+  if (empty($payment_method['settings']['go_id'])) {
+    drupal_set_message(t('GoPay is not configured for use. No GoPay goID has been specified.'), 'error');
+    return array();
+  }
+
+  $gopay = commerce_payment_gopay_configure_api($payment_method['settings']);
+  if(empty($gopay)) {
+    drupal_set_message(t('GoPay not configured correctly.'), 'error');
+    return array();
+  }
+
+  $response = $gopay->createPayment([
+    'amount' => $order->commerce_order_total[LANGUAGE_NONE][0]['amount'],
+    'currency' => GoPay\Definition\Payment\Currency::EUROS,
+    'order_number' => $order->order_id,
+    'order_description' => 'obuv',
+    'payer' => [
+      'contact' => [
+        'email' => $order->mail,
+        'phone_number' => $order->field_phone[LANGUAGE_NONE][0]['value'],
+        'country_code' => 'SVK'
+      ]
+    ],
+    'items' => [
+      [
+        'type' => GoPay\Definition\Payment\PaymentItemType::ITEM,
+        'name' => 'produkt',
+        // 'product_url' => 'https://www.eshop.cz/boty/lodicky',
+        // 'ean' => 1234567890123,
+        'amount' => $order->commerce_order_total[LANGUAGE_NONE][0]['amount'],
+        'count' => 1,
+        'vat_rate' => 21
+      ]
+    ],
+    'additional_params' => [
+      [
+        'name' => 'invoicenumber',
+        'value' => $order->order_id
+      ]
+    ],
+    'callback' => [
+      'return_url' => url('/gopay/return', array('absolute' => TRUE)),
+      'notification_url' => url('/rest/gopay/notify', array('absolute' => TRUE))
+    ],
+    'lang' => GoPay\Definition\Language::SLOVAK
+  ]);
+
+  if (!$response->hasSucceed()) {
+    drupal_set_message(t('GoPay payment preparation failed.'), 'error');
+
+    // errors format: https://doc.gopay.com/en/?shell#http-result-codes
+    watchdog("gopay", "oops, API returned {$response->statusCode}: {$response}", null, WATCHDOG_ERROR);
+    return array();
+  }
+
+  $form['#action'] = $response->json['gw_url']; // url for initiation of gateway;
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Proceed to GoPay'),
+  );
+
+  return $form;
+}
+
+function commerce_payment_gopay_configure_api($payment_settings) {
+  $path = libraries_get_path('GoPay');
+  if (empty($path)) {
+    drupal_set_message(t('API library GoPay is not installed.'), 'error');
+    return array();
+  }
+  
+  // Using PHP 5.3 namespaces.
+  if (file_exists(DRUPAL_ROOT . '/' . $path . '/autoload.php')) {
+    require_once DRUPAL_ROOT . '/' . $path . '/autoload.php';
+
+    return GoPay\Api::payments([
+      'goid' => $payment_settings['go_id'],
+      'clientId' => $payment_settings['client_id'],
+      'clientSecret' => $payment_settings['client_secret'],
+      'isProductionMode' => false,
+      'language' => GoPay\Definition\Language::SLOVAK
+    ]);
+  }
+
+  return null;
+}
+
+/**
+ * Creates an example payment transaction for the specified charge amount.
+ *
+ * @param $payment_method
+ *   The payment method instance object used to charge this payment.
+ * @param $order
+ *   The order object the payment applies to.
+ * @param $charge
+ *   An array indicating the amount and currency code to charge.
+ */
+function commerce_payment_gopay_transaction($payment_method, $order, $charge) {
+  $card_details = $order->data['commerce_payment_gopay']['credit_card'];
+
+  $transaction = commerce_payment_transaction_new('commerce_payment_gopay', $order->order_id);
+  $transaction->instance_id = $payment_method['instance_id'];
+  $transaction->remote_id = $charge['transaction_id'];
+  $transaction->amount = $charge['amount'];
+  $transaction->currency_code = $charge['currency_code'];
+  $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+
+  $transaction->message = 'Number: @number<br/>Expiration: @month/@year';
+  $transaction->message_variables = array(
+    '@number' => $card_details['number'],
+    '@month' => $card_details['exp_month'],
+    '@year' => $card_details['exp_year'],
+  );
+
+  commerce_payment_transaction_save($transaction);
+  return $transaction;
+}
